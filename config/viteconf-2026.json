@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "methodologyVersion": "static-video-metadata-v1",
+  "model": "gemini-3.8-flash",
+  "videoUrl": "https://www.youtube.com/watch?v=PfyIEgLzNYI",
+  "scheduleUrl": "https://www.viteconf.org/schedule",
+  "processingMode": "STATIC",
+  "startOffset": "0s",
+  "endOffset": "1800s",
+  "maxOutputTokens": 32768
+}
