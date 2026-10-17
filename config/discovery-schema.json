@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "start": {"type": "integer"},
+          "end": {"type": "integer"},
+          "kind": {"type": "string", "enum": ["talk", "other", "unknown"]},
+          "key": {"type": "string"},
+          "speaker": {"type": "string"},
+          "title": {"type": "string"},
+          "evidence": {"type": "string"}
+        },
+        "required": ["start", "end", "kind", "key", "speaker", "title", "evidence"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["segments"],
+  "additionalProperties": false
+}

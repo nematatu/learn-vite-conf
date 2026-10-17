@@ -1,6 +1,6 @@
 # 一次情報と検証範囲
 
-確認日：2026-10-17（日本時間）。以下は公開ドキュメントを確認した記録です。サービスへの実API送信や元動画の視聴を済ませたことは意味しません。
+確認日：2026-10-17（日本時間）。以下は公開ドキュメント・公開メタデータを確認した記録です。Geminiへの実API送信や元動画の視聴を済ませたことは意味しません。
 
 | 一次情報 | 確認できた内容・採用箇所 | 未確認・制約 |
 | --- | --- | --- |
@@ -12,7 +12,9 @@
 | [GenerateContent long decode](https://ai.google.dev/gemini-api/docs/generate-content/long-decode) | 32,768等の継続処理の説明を検索結果で確認 | 本文直接取得は失敗。モデル世代の区別には上記の直接取得できた資料を使用。継続処理は今回実装しません |
 | [ViteConf公式スケジュール](https://www.viteconf.org/schedule) | Welcome（3分）、Evan You / Developer Tooling in the Agentic Era（25分）、Christoph Nakazawa / Deploy to Void（10分）の順。時刻は概算との注記 | アーカイブ上の0:00、3:00、28:00との一致は不明 |
 | [ViteConf公式配信ページ](https://www.viteconf.org/live) | 公式サイトに配信ページが存在すること | アーカイブ全編の時間軸は確認していません |
-| [対象YouTube動画](https://www.youtube.com/watch?v=PfyIEgLzNYI) | 利用者が指定した解析対象URLとして設定 | 閲覧ツールでの直接取得に失敗。タイトル、長さ、話者、実スライド、公開状態の再確認は未完了 |
+| [対象YouTube動画](https://www.youtube.com/watch?v=PfyIEgLzNYI) | yt-dlpによる公開メタデータ取得に成功。タイトルは「ViteConf 2026 \| 5th Edition - We Are Vite」、長さ36,895秒、chaptersはnull | 映像の視聴・話者やスライドの照合は未実施。チャプターがないため映像・音声から区間識別する方式を採用 |
+| [yt-dlp公式README](https://github.com/yt-dlp/yt-dlp#usage-and-options) | `--skip-download`、`--dump-single-json`でメタデータ取得。個人設定を使わない`--ignore-config`も採用 | YouTube側の変更や利用制限で取得に失敗する可能性があります |
+| [GenerateContent構造化出力](https://ai.google.dev/gemini-api/docs/generate-content/structured-output) | REST例の `generationConfig.responseFormat.text.mimeType` と `schema` を登壇識別JSONに使用 | 今回の区間識別schemaを実APIが受理すること・識別品質は未検証 |
 
 ## 利用者提供の証跡
 
@@ -20,4 +22,16 @@
 
 ## 仕様を再確認する際の判断
 
-GenerateContent向けのパスを使用し、Interactions API向け資料の設定をそのまま転用しません。今回のリクエストは出力予算32,768に留めます。これはモデル仕様上の最大値という意味ではありません。`videoMetadata`の廃止、既定処理の変更、モデル利用不可などのエラーが出ても、モデル・方式を自動変更しません。公式資料と短区間の動作確認に基づく変更を別途記録します。
+GenerateContent向けのパスを使用し、Interactions API向け資料の設定をそのまま転用しません。詳細解析の出力予算は32,768です。これはモデル仕様上の最大値という意味ではありません。`videoMetadata`の廃止、既定処理の変更、モデル利用不可などのエラーが出ても、モデル・方式を自動変更しません。
+
+## 自動ワークフローの検証
+
+`bash tests/offline.sh` を実行し、外部通信なしのモックで以下を確認しました。
+
+- Evanのテストから全編解析への移行、30分を超える講演の結合・分割。
+- 全区間を手入力せず、登壇別ノート・メタデータ・索引・NotebookLM用Markdownを自動生成。
+- 部分失敗した講演を完成ソースへ混ぜず、次回に失敗した処理だけを再送。正常な処理は再利用。
+- 不正な時刻・打ち切り・巨大な動画入力の拒否、思考情報・署名・キーの非公開。
+- 生成物だけをコミット・pushするGit呼び出し経路。実際の生成ノートのpushは未実施。
+
+テストの合格を、実Gemini APIの成功や全登壇の正確な認識と同一視しません。実APIでのEvanテストが次の確認対象です。

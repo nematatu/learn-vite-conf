@@ -1,11 +1,13 @@
 {
-  "schemaVersion": 1,
-  "methodologyVersion": "static-video-metadata-v1",
-  "model": "gemini-3.8-flash",
+  "eventId": "viteconf-2026",
   "videoUrl": "https://www.youtube.com/watch?v=PfyIEgLzNYI",
   "scheduleUrl": "https://www.viteconf.org/schedule",
-  "processingMode": "STATIC",
-  "startOffset": "0s",
-  "endOffset": "1800s",
-  "maxOutputTokens": 32768
+  "model": "gemini-3.8-flash",
+  "maxSegmentSeconds": 1800,
+  "maxOutputTokens": 32768,
+  "discoveryOutputTokens": 8192,
+  "test": {
+    "speaker": "Evan You",
+    "maxSeconds": 1800
+  }
 }

@@ -1,101 +1,95 @@
-# ViteConf 2026 日本語学習ノート
+# ViteConf 2026 の集合知
 
-ViteConf 2026の映像・音声から、スライド、コード、図表、ライブデモと発言の関係を詳しく読み解くための、個人による非公式の学習リポジトリです。**ViteConfの公式プロジェクトではありません。**
+ViteConf 2026の全登壇を映像・音声から詳しく解析し、日本語の技術資料として蓄積するリポジトリです。後から登壇別に管理でき、NotebookLMへ渡すMarkdownも自動で保存します。個人による非公式プロジェクトであり、ViteConfの公式資料ではありません。
 
-英語の長時間カンファレンスを短い要約だけで済ませず、React・TypeScriptなどの開発経験がある方が、技術の仕組みや設計判断まで日本語で学べる資料を蓄積します。生成の条件とプロンプトも公開し、後から検証・再生成できるようにします。
+目標は、**実行を任せたら、登壇区間の特定・詳細解析・資料の整理と保存まで終わっていること**です。利用者によるタイムテーブルや秒数の入力、ノートの手作業での分割は前提にしません。Evan Youのテストは、この全編ワークフローを小さな範囲で確かめるためのものです。
 
-- [元動画（依頼で指定されたYouTubeアーカイブ）](https://www.youtube.com/watch?v=PfyIEgLzNYI)
-- [ViteConf公式スケジュール](https://www.viteconf.org/schedule)
-- [学習ノートと生成状況](notes/README.md)
-- [目的・範囲](docs/project-goals.md)／[解析手法と制約](docs/methodology.md)／[公式資料の確認記録](docs/references.md)
-- [次に進める作業](docs/next-steps.md)
+- [元動画](https://www.youtube.com/watch?v=PfyIEgLzNYI)／[公式スケジュール](https://www.viteconf.org/schedule)
+- [保存する学習資料](notes/README.md)
+- [解析の仕組み](docs/methodology.md)／[一次情報・検証記録](docs/references.md)
+- [詳細解析プロンプト全文](prompts/gemini-talk-analysis.md)
 
-## 現在の状態
+## 実行
 
-2026-10-17時点で、生成・送信・抽出スクリプトとリクエストJSONを用意しています。**今回の30分解析は未実行**です。実行環境にGemini APIキーがなく、解析レポート・実測トークン数はまだありません。未生成のレポートファイルや架空の登壇別ノートは掲載していません。
+必要なもの：Bash 3.2以上、curl、jq、shasum、[yt-dlp](https://github.com/yt-dlp/yt-dlp)。`--push`には認証済みのGitも必要です。yt-dlpは長さ・チャプターの取得だけに使用し、動画・音声をダウンロードしません。YouTubeへの対応に必要なJavaScript実行環境等はyt-dlpの導入案内に従ってください。
 
-以前の20秒テストについては[利用者からの報告](docs/experiments/2026-10-17-20s-smoke-test.md)として保存しています。このリポジトリでの再現実行や元映像との照合を済ませたものではありません。
-
-## 解析する内容
-
-最初の実行対象は元動画の **0〜1800秒（00:00〜30:00）**、モデルは `gemini-3.8-flash` です。GenerateContent APIへYouTube URLを直接渡し、`fileData` と `videoMetadata.startOffset` / `endOffset` で入力区間を制限します。既定のStatic処理を使い、Agenticへの切り替えは行いません。
-
-音声の文字起こしだけでは、画面にしか出ないコード、型、CLI、アーキテクチャ図、ベンチマーク条件を取り落とします。[解析プロンプト全文](prompts/gemini-talk-analysis.md)で、映像・音声の対応、確認根拠、元動画の時刻、不明点を含む詳細なMarkdownを求めています。
-
-公式スケジュールにはWelcome、Evan Youの「Developer Tooling in the Agentic Era」、Christoph Nakazawaの「Deploy to Void」がこの順で掲載されています。ただし、配信予定時刻とアーカイブ内の秒数は同じものではありません。登壇の境界は映像で確認するまで不明です。30分全体をEvan Youの発言として扱いません。
-
-## 再現方法
-
-必要なものはBash 3.2以上、curl、jq、shasum、Gitです。公開時には認証済みのGitHub CLIも使用します。実装にNode.js、Python、Webアプリ、サーバーは不要です。
+まずEvanのテストを実行します。
 
 ```bash
-git clone https://github.com/nematatu/learn-vite-conf.git
-cd learn-vite-conf
-bash scripts/build-request.sh
-bash scripts/run-first-30m.sh --dry-run
+bash scripts/run.sh test
 ```
 
-`config/viteconf-2026.json` が動画URL・モデル・区間・出力上限の定義、`prompts/gemini-talk-analysis.md` がプロンプトの唯一の原本です。`jq --rawfile` で原文を安全に読み込み、`requests/first-30m.json` を生成します。生成スクリプトとドライランはAPI通信もキー入力も行いません。カレントディレクトリに依存せず実行できます。
+冒頭30分を映像・音声で識別し、その中でEvan Youと識別できた登壇部分だけを詳細解析します。Welcomeや他の登壇は混ぜません。講演がテスト範囲を超える場合は部分資料として記録します。これは「Evanの講演が0〜30分と確定している」という意味ではありません。
 
-実送信は、ご自身のターミナルで次を実行してください。
+全登壇をまとめて処理する場合：
 
 ```bash
-bash scripts/run-first-30m.sh
+bash scripts/run.sh all
 ```
 
-環境変数 `GEMINI_API_KEY` がなければ、ターミナルの非表示入力でキーをお尋ねします。**キーをチャットへ貼る必要はありません。** すでに設定している環境変数も使用できます。キーはファイル・URL・curlの引数へ入れず、標準入力のヘッダー設定で渡します。`.env` は自動読み込みしません。スクリプトを `source` せず、上記のようにBashで実行してください。
+最初のキー入力以降は、全動画の区間識別、登壇の解析、登壇別保存、NotebookLM用の結合、索引作成まで自動で進みます。「全編を一括処理」は1コマンドで全登壇を処理する意味です。10時間の動画全体を1リクエストに詰めず、各入力は最大30分に分割して順に送ります。
 
-動画・モデル・区間を表示した後、同期のPOSTを**1回だけ**送ります。自動リトライ、出力の自動継続、次の登壇の解析は行いません。請求設定や有料枠の変更も行いません。APIの利用可否・割当・請求状態は未確認で、Google AIの個人向け購読からAPI利用条件を判断しません。
-
-処理中はターミナルを開いたままにしてください。クライアント側の接続待ちは最大20分、接続確立は最大30秒です。サーバーが先に切断する可能性もあります。非同期ジョブではなく、端末の切断・スリープ・プロセス終了後の完了や復旧は保証しません。タイムアウト時にもサーバーが処理を継続した可能性があるため、まずローカルの記録を確認してください。
-
-## レスポンスと学習資料
-
-実行時のデータは、Git対象外の次の場所へ保存します。
-
-| 場所 | 内容 |
-| --- | --- |
-| `.local/responses/first-30m.json` | 最新の生レスポンス |
-| `.local/logs/first-30m-run.json` | 最新の実行日時・HTTP・curlの終了状態 |
-| `.local/logs/first-30m-curl.stderr` | 最新の通信エラー。自動でコンソール出力しません |
-| `.local/runs/<実行ID>/` | 各回のリクエスト・設定・プロンプト・生レスポンス・ログ |
-| `.local/reports/` | 抽出用メタデータ、不完全な応答の本文 |
-
-HTTP 200、curl終了0、エラーなし、候補1件、`finishReason: STOP`、空白以外の本文あり、を満たすと、実行スクリプトが次を自動生成します。
-
-- `notes/first-30-minutes.md`：本文を省略せず抽出したMarkdown。「AI生成・未照合」の注記付きです。
-- `notes/first-30-minutes.metadata.json`：実行日時（UTC）、モデル、区間、HTTP、終了理由、トークン数、リクエスト・プロンプトのSHA-256、検証状況。
-
-未返却のトークン数は `null`（不明）です。動画入力トークン数には `usageMetadata.promptTokensDetails` の `VIDEO` のみを用い、音声を含む動画全体の消費量とは同一視しません。思考テキストと `thoughtSignature` はノートへ混ぜません。
-
-保存済みレスポンスから、APIに再接続せず抽出し直す場合：
+GitHubへのコミット・pushも含める場合：
 
 ```bash
-bash scripts/extract-report.sh
+bash scripts/run.sh all --push
 ```
 
-`MAX_TOKENS`、`CONTINUATION`、空本文、ブロック、通信・APIエラーは完全な応答と扱いません。本文があれば `.local/reports/first-30m.incomplete.md` に残し、公開用ノートは更新せず異常終了します。JSONとして読めない場合は生レスポンスとログを保持します。
+`test --push`も使用できます。公開対象は、そのイベントの `notes/` と `notebooklm/` の生成物だけです。既存のステージ済み変更がある場合は混ぜずに公開を停止します。実行のたびに人による承認・映像照合を求めるフローはありません。
 
-再送には `--rerun` を明示する必要があります。以前の `.local/runs/` は残ります。中断後に `.local/first-30m.lock` が残った場合は、別の実行がないことを確認してからその空ディレクトリを `rmdir .local/first-30m.lock` で削除してください。再送は追加のAPI利用になります。
+APIキーは環境変数 `GEMINI_API_KEY`、またはターミナルの非表示入力で渡します。チャットへ貼らないでください。キーは送信本文・ファイル・URL・curlの引数に入れません。`.env`は読み込みません。請求設定・モデル・解析方式を自動変更しません。
 
-## 品質確認と公開
+通信なしで動作方針と設定を確認する場合：
 
-`STOP` は生成の終了を表す条件であり、内容の正しさを保証しません。本文の「確認済み」はモデルの自己申告です。人による確認済みの事実と混同せず、[検証票](docs/quality-review.md)で話者・境界、スライド、コード、数値、引用を元映像と照合します。通常のフレーム抽出では短い表示や細かいコードを取り逃す可能性があります。
+```bash
+bash scripts/run.sh test --dry-run
+bash scripts/run.sh all --dry-run
+```
 
-`videoMetadata` は[APIリファレンス](https://ai.google.dev/api/generate-content#VideoMetadata)で非推奨です。今回の成功報告がある方式を維持し、将来の移行は公式仕様と短区間の動作を確認してから別の手法バージョンとして記録します。
+## 自動保存先
 
-生成後のコミット・pushは自動化していません。未検証の本文や転載範囲をレビューし、Evan Youの講演境界が確認できたら `notes/talks/evan-you-developer-tooling-in-the-agentic-era.md` を作成します。その段階でノート索引とREADMEの状態を更新し、対象ファイルだけを明示してコミットしてください。詳細は[次の作業](docs/next-steps.md)をご覧ください。
+```text
+notes/viteconf-2026/
+  README.md                          # 自動生成する索引
+  source.json                        # 元動画の長さ・取得日時等
+  timeline-test.json / timeline-all.json
+  status.json                        # 処理範囲・失敗数・未識別区間数
+  talks/<開始秒>-<講演キー>/
+    talk.json                        # 氏名・題名・区間・識別根拠
+    part-<開始秒>-<終了秒>.md          # 詳細解析の本文
+    part-<開始秒>-<終了秒>.metadata.json
+    status.json
 
-オフラインの検証（実API・本物のキーは使用しません）：
+notebooklm/viteconf-2026/
+  <開始秒>-<講演キー>.md               # 登壇別の独立した入力資料
+
+.local/viteconf-2026/                 # Git対象外
+  source.json / schedule.json
+  jobs/<リクエストとモデルのハッシュ>/  # 送信JSON・生応答・通信ログ
+```
+
+NotebookLM用資料には、題名、登壇者、出典URL、元動画の時刻、識別根拠、解析本文を含めます。重要な情報を削る再要約は行いません。複数の解析区間に分かれた講演は順番に結合します。NotebookLMへアップロードする操作自体は、このワークフローに含めません。
+
+## 再開と失敗の扱い
+
+成功した同一モデル・同一リクエストの応答を再利用します。同じコマンドを再実行すると、未完了・失敗した処理をやり直し、成功した処理へのAPI再送を避けます。プロンプトや設定を変えた場合は新しい要求として扱います。
+
+失敗した詳細解析があっても、他の講演の解析を続けます。不完全な講演は索引に未完了と記し、NotebookLMの完成ソースへ出力しません。登壇識別の失敗、認証・利用枠エラーは停止して記録します。1要求の自動リトライや再帰的な追加解析は行いません。
+
+処理は同期です。実行中は端末を維持してください。再開可能な保存はしますが、端末終了後も裏で完走する仕組みではありません。中断してロックが残った場合は、実行中のプロセスがないことを確認し、`rmdir .local/viteconf-2026/lock` で空のロックを除いて同じコマンドを実行します。タイムアウトした要求を再実行すると、サーバー側で前回の処理が行われていた場合に重複利用になる可能性があります。
+
+## 正確性と現在の検証状況
+
+人が介入しなくても保存まで進む一方、**AIによる識別や説明が正しいことを保証するものではありません**。生成資料に自動推定・人による未照合であることを付し、不明な話者は不明のまま保存します。時間軸の欠落・重複・範囲外は機械的に検査します。スライド、コード、図表、デモ、数値の根拠と不明点をプロンプトで求めています。
+
+2026-10-17：実動画のメタデータと公式ページを取得できました。実Gemini APIはキー未設定のため未実行で、学習ノートも未生成です。Evanテストから全編処理への移行、登壇の結合・分割、部分失敗からの再開、自動保存・索引・NotebookLM出力・Git公開経路は、外部通信をしないモックで検証しています。実映像の識別精度・詳細解析品質はまだ検証できていません。
 
 ```bash
 bash tests/offline.sh
 ```
 
-初期実装で実施した検証は[検証記録](docs/experiments/2026-10-17-offline-validation.md)に掲載しています。
+`videoMetadata`は[APIリファレンス](https://ai.google.dev/api/generate-content#VideoMetadata)で非推奨です。利用者の成功報告がある `fileData` + `videoMetadata` のStatic方式と指定モデル `gemini-3.8-flash` を維持しています。詳細は[参照記録](docs/references.md)に記載しています。
 
-## 出典・権利
+## クレジット・権利
 
-元動画・登壇内容の提供者であるViteConf主催者、登壇者、関連プロジェクトに感謝いたします。映像・音声・スライド・コードなどの第三者の権利は各権利者に帰属します。動画本体、全文の書き起こし、スライドの大量複製を公開する目的ではありません。独自の日本語解説を中心とし、必要な引用には出典と時刻を付します。
-
-リポジトリ全体への一律のライセンスは設定していません。[ライセンス方針](LICENSE-POLICY.md)をご確認ください。
+元動画、発表、スライド等の出典はViteConf主催者・登壇者です。独自の日本語解説を中心にし、必要な短い引用に出典を付けます。元の映像・音声・スライドの権利を再許諾しません。[ライセンス方針](LICENSE-POLICY.md)をご確認ください。

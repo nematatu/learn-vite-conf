@@ -1,155 +1,135 @@
 #!/usr/bin/env bash
-# 実APIに接続せず、通信回数・終了条件・抽出・秘密情報の扱いを検証します。
+# 動画メタデータ・Gemini・Gitをモック化して自動ワークフローを検証します。
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-command -v jq >/dev/null
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/viteconf-offline.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin"
+cat > "$tmp/bin/yt-dlp" <<'MOCK'
+#!/usr/bin/env bash
+printf '{"id":"PfyIEgLzNYI","title":"Offline fixture","duration":4000,"chapters":null}\n'
+MOCK
 cat > "$tmp/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-# このモックは外部通信をしません。
-[ "$1" = '-q' ] || exit 91
-[ -z "${GEMINI_API_KEY+x}" ] || exit 92
-IFS= read -r header
-[ "$header" = 'header = "x-goog-api-key: offline-test-key"' ] || exit 93
-printf 'call\n' >> "$OFFLINE_TEST_STATE/calls"
+[ "$1" = '-q' ]
+[ -z "${GEMINI_API_KEY+x}" ]
 out=''
+request=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    *offline-test-key*) exit 94 ;;
-    --output) out=$2; shift ;;
+    --output|-o) out=$2; shift ;;
+    --data-binary) request=${2#@}; shift ;;
+    *offline-test-key*) exit 99 ;;
   esac
   shift
 done
-cp "$OFFLINE_TEST_STATE/fixture.json" "$out"
-printf '%s' "${OFFLINE_TEST_HTTP:-200}"
-exit "${OFFLINE_TEST_CURL_EXIT:-0}"
+if [ -z "$request" ]; then
+  printf '<html><script>ignore me</script><p>Evan You - Agentic Era</p><p>Alice - Second talk</p></html>\n' > "$out"
+  exit 0
+fi
+IFS= read -r header
+[ "$header" = 'header = "x-goog-api-key: offline-test-key"' ]
+start=$(jq -r '.contents[0].parts[0].videoMetadata.startOffset|rtrimstr("s")' "$request")
+end=$(jq -r '.contents[0].parts[0].videoMetadata.endOffset|rtrimstr("s")' "$request")
+[ "$((end-start))" -le 1800 ]
+if jq -e '.generationConfig.responseFormat' "$request" >/dev/null; then
+  printf 'discover %s %s\n' "$start" "$end" >> "$OFFLINE_STATE/calls"
+  case "$start" in
+    0) content='{"segments":[{"start":0,"end":60,"kind":"other","key":"welcome","speaker":"Host","title":"Welcome","evidence":"Welcome slide"},{"start":60,"end":1800,"kind":"talk","key":"evan-agentic-era","speaker":"Evan You","title":"Agentic Era","evidence":"Evan slide"}]}' ;;
+    1800) content='{"segments":[{"start":1800,"end":2000,"kind":"talk","key":"evan-agentic-era","speaker":"Evan You","title":"Agentic Era","evidence":"Evan continues"},{"start":2000,"end":3600,"kind":"talk","key":"second-talk","speaker":"Alice","title":"Second talk","evidence":"Alice slide"}]}' ;;
+    3600) content='{"segments":[{"start":3600,"end":3900,"kind":"talk","key":"second-talk","speaker":"Alice","title":"Second talk","evidence":"Alice continues"},{"start":3900,"end":4000,"kind":"other","key":"closing","speaker":"Host","title":"Closing","evidence":"Closing slide"}]}' ;;
+    *) exit 90 ;;
+  esac
+  if [ "${OFFLINE_INVALID_DISCOVERY:-0}" = 1 ]; then
+    content=$(printf '%s' "$content" | jq '.segments[0].end=99999')
+  fi
+else
+  printf 'analyze %s %s\n' "$start" "$end" >> "$OFFLINE_STATE/calls"
+  # 原文プロンプトを省略せず含むことも確認。
+  jq -e --rawfile p "$OFFLINE_STATE/prompts/gemini-talk-analysis.md" \
+    '.contents[0].parts[1].text|startswith($p)' "$request" >/dev/null
+  content="# テスト専用解析 ${start}-${end}"
+  if [ "$start" = "${OFFLINE_FAIL_START:--1}" ]; then
+    printf '{"error":{"code":500}}' > "$out"
+    printf 500
+    exit 0
+  fi
+fi
+jq -n --arg content "$content" --arg reason "${OFFLINE_FINISH:-STOP}" \
+  '{candidates:[{finishReason:$reason,content:{parts:[
+    {thought:true,text:"PRIVATE_THOUGHT"},{text:$content,thoughtSignature:"PRIVATE_SIGNATURE"}
+  ]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:30,thoughtsTokenCount:20,totalTokenCount:150}}' > "$out"
+printf 200
 MOCK
-chmod +x "$tmp/bin/curl"
-cat > "$tmp/base.json" <<'JSON'
-{
-  "modelVersion": "gemini-3.8-flash",
-  "candidates": [{"finishReason":"STOP","content":{"parts":[
-    {"thought":true,"text":"PRIVATE_THOUGHT_MARKER"},
-    {"text":"# オフライン検証用\n\n前半", "thoughtSignature":"PRIVATE_SIGNATURE_MARKER"},
-    {"text":"と後半。\n"}
-  ]}}],
-  "usageMetadata": {
-    "promptTokenCount":100,"candidatesTokenCount":30,"thoughtsTokenCount":20,"totalTokenCount":150,
-    "promptTokensDetails":[{"modality":"VIDEO","tokenCount":70},{"modality":"AUDIO","tokenCount":10}]
-  }
-}
-JSON
+cat > "$tmp/bin/git" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$OFFLINE_STATE/git-calls"
+exit 0
+MOCK
+chmod +x "$tmp/bin/"*
 new_case() {
-  case_root="$tmp/$1"
-  mkdir -p "$case_root"
-  cp -R "$ROOT/scripts" "$ROOT/config" "$ROOT/prompts" "$case_root/"
-  cp "$tmp/base.json" "$case_root/fixture.json"
+  project="$tmp/$1"
+  mkdir -p "$project"
+  cp -R "$ROOT/scripts" "$ROOT/config" "$ROOT/prompts" "$project/"
 }
 run_case() {
-  GEMINI_API_KEY=offline-test-key PATH="$tmp/bin:$PATH" \
-    OFFLINE_TEST_STATE="$case_root" OFFLINE_TEST_HTTP="${test_http:-200}" \
-    OFFLINE_TEST_CURL_EXIT="${test_exit:-0}" \
-    bash "$case_root/scripts/run-first-30m.sh" "$@" > "$case_root/output.log" 2>&1
+  GEMINI_API_KEY=offline-test-key PATH="$tmp/bin:$PATH" OFFLINE_STATE="$project" \
+    OFFLINE_FAIL_START="${fail_start:--1}" OFFLINE_FINISH="${finish:-STOP}" \
+    OFFLINE_INVALID_DISCOVERY="${invalid:-0}" \
+    bash "$project/scripts/run.sh" "$@" > "$project/output.log" 2>&1
 }
-assert_one_call() { [ "$(wc -l < "$case_root/calls" | tr -d ' ')" = 1 ]; }
-
 for script in "$ROOT"/scripts/*.sh "$ROOT"/tests/*.sh; do bash -n "$script"; done
-new_case dry
-run_case --dry-run
-[ ! -e "$case_root/calls" ]
-jq -e --rawfile prompt "$case_root/prompts/gemini-talk-analysis.md" '
-  .contents[0].parts[1].text == $prompt and
-  .contents[0].parts[0].videoMetadata == {startOffset:"0s",endOffset:"1800s"} and
-  .contents[0].parts[0].fileData.fileUri == "https://www.youtube.com/watch?v=PfyIEgLzNYI" and
-  .generationConfig.maxOutputTokens == 32768
-' "$case_root/requests/first-30m.json" >/dev/null
-printf 'PASS: 構文・ドライラン・区間・プロンプト全文\n'
-
-new_case success
-run_case
-assert_one_call
-jq -e '.verification.transport == "complete_response" and
-  .verification.videoCrossCheck == "not_performed" and
-  .videoInputTokenCount == 70 and .promptTokenCount == 100 and
-  .thoughtsTokenCount == 20 and .finishReasons == ["STOP"] and
-  .httpStatus == 200 and .curlExit == 0' \
-  "$case_root/notes/first-30-minutes.metadata.json" >/dev/null
-[[ "$(cat "$case_root/notes/first-30-minutes.md")" == *'前半と後半。'* ]]
-if /usr/bin/grep -R -E 'PRIVATE_THOUGHT_MARKER|PRIVATE_SIGNATURE_MARKER' "$case_root/notes" >/dev/null; then exit 1; fi
-# 既存の応答は明示しない限り再送しない。再抽出では通信しない。
-if run_case; then exit 1; fi
-assert_one_call
-bash "$case_root/scripts/extract-report.sh" >/dev/null
-assert_one_call
-run_case --rerun
-[ "$(wc -l < "$case_root/calls" | tr -d ' ')" = 2 ]
-[ "$(find "$case_root/.local/runs" -name run.json | wc -l | tr -d ' ')" = 2 ]
-# 送信JSONの改変を見逃さない。
-run_id=$(jq -r .runId "$case_root/.local/logs/first-30m-run.json")
-printf '\n' >> "$case_root/.local/runs/$run_id/request.json"
-if bash "$case_root/scripts/extract-report.sh" > /dev/null 2>&1; then exit 1; fi
-printf 'PASS: 正常抽出・思考/署名の除外・1回送信・再送防止・実行履歴・ハッシュ照合\n'
-
-for scenario in max_tokens continuation empty blocked api_error whitespace multiple http_error timeout invalid_json; do
-  new_case "$scenario"
-  test_http=200
-  test_exit=0
-  case "$scenario" in
-    max_tokens) filter='.candidates[0].finishReason = "MAX_TOKENS"' ;;
-    continuation) filter='.candidates[0].finishReason = "CONTINUATION"' ;;
-    empty) filter='.candidates = []' ;;
-    blocked) filter='.promptFeedback.blockReason = "SAFETY"' ;;
-    api_error) filter='.error = {code:400,message:"PRIVATE_ERROR_MARKER"}' ;;
-    whitespace) filter='.candidates[0].content.parts = [{text:" \n\t"}]' ;;
-    multiple) filter='.candidates += .candidates' ;;
-    http_error) filter='.'; test_http=429 ;;
-    timeout) filter='.'; test_exit=28; test_http=000 ;;
-    invalid_json) filter='.' ;;
-  esac
-  jq "$filter" "$tmp/base.json" > "$case_root/fixture.json"
-  if [ "$scenario" = invalid_json ]; then printf 'not json\n' > "$case_root/fixture.json"; fi
-  mkdir -p "$case_root/notes"
-  printf '既存ノートを保護\n' > "$case_root/notes/first-30-minutes.md"
-  if run_case; then printf 'FAIL: %s\n' "$scenario"; exit 1; fi
-  assert_one_call
-  [ "$(cat "$case_root/notes/first-30-minutes.md")" = '既存ノートを保護' ]
-  [ -e "$case_root/.local/responses/first-30m.json" ]
-  if [ "$scenario" != invalid_json ]; then
-    [ -e "$case_root/.local/reports/first-30m.metadata.json" ]
-    if /usr/bin/grep -q PRIVATE_ERROR_MARKER "$case_root/.local/reports/first-30m.metadata.json"; then exit 1; fi
-  fi
-done
-printf 'PASS: 打ち切り・継続・空本文・ブロック・API/HTTPエラー・タイムアウト・不正JSONで公開ノートを保護\n'
-
-new_case missing_usage
-test_http=200
-test_exit=0
-jq 'del(.usageMetadata)' "$tmp/base.json" > "$case_root/fixture.json"
-run_case
-jq -e '.promptTokenCount == null and .videoInputTokenCount == null and
-  .totalTokenCount == null' "$case_root/notes/first-30-minutes.metadata.json" >/dev/null
-printf 'PASS: 未返却の使用量をnullとして保持\n'
-
-for scenario in full_video bad_model bad_mode bad_tokens missing_end; do
-  new_case "$scenario"
-  case "$scenario" in
-    full_video) filter='.endOffset="36000s"' ;;
-    bad_model) filter='.model="another-model"' ;;
-    bad_mode) filter='.processingMode="AGENTIC"' ;;
-    bad_tokens) filter='.maxOutputTokens=65536' ;;
-    missing_end) filter='del(.endOffset)' ;;
-  esac
-  jq "$filter" "$case_root/config/viteconf-2026.json" > "$case_root/config/invalid.json"
-  mv "$case_root/config/invalid.json" "$case_root/config/viteconf-2026.json"
-  if run_case --dry-run; then exit 1; fi
-  [ ! -e "$case_root/calls" ]
-done
-# キーを引数・保存ファイルへ含めていないことを検査。
-if /usr/bin/grep -R -l 'offline-test-key' "$tmp" --exclude=curl >/dev/null; then
-  printf 'FAIL: 検証用キーが保存ファイルへ漏れています。\n'; exit 1
-fi
-printf 'PASS: 全編送信・モデル/方式変更・過大出力・区間欠落を拒否、キーの非保存\n'
-printf 'すべてのオフライン検証が成功しました（実API未実行）。\n'
+new_case pipeline
+run_case all --dry-run
+[ ! -e "$project/calls" ]
+run_case test
+[ "$(wc -l < "$project/calls" | tr -d ' ')" = 2 ]
+[ -e "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md" ]
+[ ! -e "$project/notes/viteconf-2026/talks/0-welcome" ]
+# 本番の長さはテスト上限を超える。allでは自動識別・結合・分割して全登壇へ進む。
+fail_start=3800
+if run_case all; then exit 1; fi
+jq -e '.failedParts==1 and .coveredUntil==4000 and .state=="partial_failure"' \
+  "$project/notes/viteconf-2026/status.json" >/dev/null
+[ ! -e "$project/notebooklm/viteconf-2026/2000-second-talk.md" ]
+[ ! -e "$project/notes/viteconf-2026/talks/60-evan-agentic-era/part-000060-001800.md" ]
+# 同じコマンドで成功したAPI応答を再利用し、失敗した一部分だけを再送。
+count_before=$(wc -l < "$project/calls" | tr -d ' ')
+fail_start=-1
+run_case all --push
+count_after=$(wc -l < "$project/calls" | tr -d ' ')
+[ "$((count_after-count_before))" = 1 ]
+[ -s "$project/git-calls" ]
+[ -e "$project/notebooklm/viteconf-2026/2000-second-talk.md" ]
+jq -e '.complete==true and .parts==2' "$project/notes/viteconf-2026/talks/60-evan-agentic-era/status.json" >/dev/null
+jq -e '.failedParts==0 and .coveredUntil==4000' "$project/notes/viteconf-2026/status.json" >/dev/null
+# 重複実行はAPI再送なし。自動出力は外部の相対リンクなしで読める資料。
+run_case all
+[ "$(wc -l < "$project/calls" | tr -d ' ')" = "$count_after" ]
+grep -q 'テスト専用解析 60-1860' "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md"
+grep -q 'テスト専用解析 1860-2000' "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md"
+if grep -R -E 'PRIVATE_THOUGHT|PRIVATE_SIGNATURE' "$project/notes" "$project/notebooklm" >/dev/null; then exit 1; fi
+printf 'PASS: Evanテスト→全編自動識別→講演の結合・分割→自動保存・索引・NotebookLM出力\n'
+printf 'PASS: 部分失敗の表示・完成ソースからの除外・未完了分だけ再開・完了分の再送なし・Git公開経路\n'
+new_case invalid_timeline
+invalid=1
+if run_case test; then exit 1; fi
+[ ! -e "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md" ]
+invalid=0
+run_case test
+[ -e "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md" ]
+printf 'PASS: 区間外の識別時刻を拒否し、次回に修復可能\n'
+new_case truncated
+finish=MAX_TOKENS
+if run_case test; then exit 1; fi
+[ ! -e "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md" ]
+finish=STOP
+new_case scope
+jq '.maxSegmentSeconds=36000' "$project/config/viteconf-2026.json" > "$project/config/invalid.json"
+mv "$project/config/invalid.json" "$project/config/viteconf-2026.json"
+if run_case all; then exit 1; fi
+[ ! -e "$project/calls" ]
+if grep -R -l 'offline-test-key' "$tmp" --exclude=curl >/dev/null; then exit 1; fi
+printf 'PASS: 出力打ち切り・巨大入力の拒否・思考情報/署名/キーの非公開\n'
+printf 'すべてのオフライン検証が成功しました。実Gemini解析は未実行です。\n'
