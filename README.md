@@ -9,6 +9,8 @@ ViteConf 2026の全登壇を映像・音声から詳しく解析し、日本語�
 - [解析の仕組み](docs/methodology.md)／[一次情報・検証記録](docs/references.md)
 - [詳細解析プロンプト全文](prompts/gemini-talk-analysis.md)
 
+現段階はPC上で小範囲の実測を行い、その結果から全編処理へ進む方針です。将来はURLを渡すだけのリモート実行を目指しますが、GitHub Actionsの実行ジョブ・別環境への再開・任意URLに対応する入口はまだありません。[運用順序と移行条件](docs/methodology.md#実行環境と運用順序)に、現在できることと未実装の部分を記載しています。
+
 ## 実行
 
 必要なもの：Bash 3.2以上、curl、jq、shasum、[yt-dlp](https://github.com/yt-dlp/yt-dlp)。`--push`には認証済みのGitも必要です。yt-dlpは長さ・チャプターの取得だけに使用し、動画・音声をダウンロードしません。YouTubeへの対応に必要なJavaScript実行環境等はyt-dlpの導入案内に従ってください。

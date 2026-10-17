@@ -15,6 +15,8 @@
 | [対象YouTube動画](https://www.youtube.com/watch?v=PfyIEgLzNYI) | yt-dlpによる公開メタデータ取得に成功。タイトルは「ViteConf 2026 \| 5th Edition - We Are Vite」、長さ36,895秒、chaptersはnull | 映像の視聴・話者やスライドの照合は未実施。チャプターがないため映像・音声から区間識別する方式を採用 |
 | [yt-dlp公式README](https://github.com/yt-dlp/yt-dlp#usage-and-options) | `--skip-download`、`--dump-single-json`でメタデータ取得。個人設定を使わない`--ignore-config`も採用 | YouTube側の変更や利用制限で取得に失敗する可能性があります |
 | [GenerateContent構造化出力](https://ai.google.dev/gemini-api/docs/generate-content/structured-output) | REST例の `generationConfig.responseFormat.text.mimeType` と `schema` を登壇識別JSONに使用 | 今回の区間識別schemaを実APIが受理すること・識別品質は未検証 |
+| [GitHub Actionsの実行制限](https://docs.github.com/en/actions/reference/limits) | GitHub-hosted runnerの1ジョブは最大6時間との記載を確認 | 今回の全編解析がその時間内に収まるかは不明。移行時は1ジョブへの全編詰め込みを前提とせず、実測に応じた分割・再開を設計 |
+| [Gemini APIのレート制限](https://ai.google.dev/gemini-api/docs/rate-limits) | 個別のモデル・プロジェクトの利用制限を確認する際の一次情報 | 利用者のプロジェクトの実際の割当・利用可能枠は未確認。Actionsへ移しても、そのAPI側の制限がなくなるとは扱わない |
 
 ## 利用者提供の証跡
 
