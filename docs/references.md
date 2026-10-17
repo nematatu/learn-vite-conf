@@ -35,3 +35,14 @@ GenerateContent向けのパスを使用し、Interactions API向け資料の設�
 - 生成物だけをコミット・pushするGit呼び出し経路。実際の生成ノートのpushは未実施。
 
 テストの合格を、実Gemini APIの成功や全登壇の正確な認識と同一視しません。実APIでのEvanテストが次の確認対象です。
+
+## エラー処理の根拠と検証
+
+- [GenerateContentのFinishReason](https://ai.google.dev/api/generate-content#FinishReason)：`MAX_TOKENS`、`CONTINUATION`、ブロック等を区別する根拠です。
+- [Google APIのエラー構造](https://google.aip.dev/193)：`error.status`と構造化された`ErrorInfo`等を優先し、返却メッセージだけに依存しない方針に使用しています。
+- [Google RPCの詳細型](https://github.com/googleapis/googleapis/blob/master/google/rpc/error_details.proto)：QuotaFailure・RetryInfo・BadRequestのフィールドを参照しています。
+- [curl終了コード](https://curl.se/libcurl/c/libcurl-errors.html)：DNS・接続・TLS・タイムアウト・ファイル読み書きの分類に使用しています。
+
+Interactions APIの`error.code`文字列形式は今回のGenerateContentへ転用していません。個別の理由や割当情報が欠落する場合は原因を断定せず、未分類または種別不明のエラーとして扱います。メッセージの文言からの判定には、その根拠区分を付けます。
+
+`bash tests/errors.sh`で37種類の分類を検証しました。さらに`bash tests/offline.sh`で、認証・日次枠・DNSによる後続停止、打ち切り後の他講演の継続、待機時間の表示、キーの伏字化、公開用要約からの生メッセージ除外、再開後のエラー更新、スケジュール取得・GitHub反映失敗の表示を確認しています。実APIでこれらのエラーを発生させた検証ではありません。

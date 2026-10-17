@@ -42,9 +42,86 @@ get_key() {
   case "$GEMINI_API_KEY" in *[!a-zA-Z0-9_-]*) die 'APIキーの形式が不正です。' ;; esac
 }
 
+# エラーの分類結果・根拠・次の対応を保存し、利用者にも同じ内容を示します。
+report_error() {
+  local phase=$1 talk=$2 start=$3 end=$4 http=$5 rc=$6 response=$7
+  local category=${8:-} log=${9:-} context classified valid=false parsed
+  mkdir -p "$CACHE" "$OUT"
+  parsed="$WORK/error-response.json"
+  if [ -f "$response" ] && jq -s -e 'length==1 and (.[0]|type=="object")' "$response" >/dev/null 2>&1; then
+    # 形式がJSONでもフィールド型が異なるケースは分類器で不正応答に落とします。
+    jq . "$response" > "$parsed"
+    valid=true
+  else
+    printf '{}\n' > "$parsed"
+  fi
+  context=$(jq -n --arg phase "$phase" --arg talk "$talk" --arg model "$model" \
+    --argjson start "$start" --argjson end "$end" --argjson http "$http" \
+    --argjson rc "$rc" --argjson valid "$valid" \
+    '{phase:$phase,talk:$talk,start:$start,end:$end,model:$model,
+      httpStatus:$http,curlExit:$rc,responseValid:$valid}')
+  if ! classified=$(jq --argjson context "$context" --arg localCategory "$category" \
+    -f "$ROOT/scripts/classify-error.jq" "$parsed" 2> "$WORK/classifier.stderr"); then
+    # 予期しない型の応答でも、分類器自体の失敗でエラーを隠さない。
+    context=$(printf '%s' "$context" | jq '.responseValid=false')
+    classified=$(printf '{}' | jq --argjson context "$context" --arg localCategory "" \
+      -f "$ROOT/scripts/classify-error.jq")
+  fi
+  # キーをjqの引数へ渡さず、返却文中に含まれていた場合も表示・要約前に伏せます。
+  if [ -n "${GEMINI_API_KEY:-}" ]; then
+    classified=${classified//"$GEMINI_API_KEY"/[REDACTED]}
+  fi
+  printf '%s\n' "$classified" > "$WORK/last-error.json"
+  jq -c . "$WORK/last-error.json" >> "$CACHE/errors.jsonl"
+  if [ "$phase" = discovery ] || jq -e .stopRun "$WORK/last-error.json" >/dev/null; then
+    STOP_RUN=true
+  fi
+  printf '\n' >&2
+  jq -r '"エラー [\(.category)]\n工程: \(.phase) / 登壇: \(.talk)",
+    (if .start==null or .end==null then "対象区間: なし" else "元動画: \(.start)〜\(.end)秒" end),
+    "原因: \(.summary)\n次の対応: \(.action)\nHTTP: \(.httpStatus) / curl: \(.curlExit)",
+    (if .apiStatus!="" then "APIステータス: " + .apiStatus else empty end),
+    (if .finishReason!="" then "finishReason: " + .finishReason else empty end),
+    (if .blockReason!="" then "blockReason: " + .blockReason else empty end),
+    "判定根拠: " + ({api_status_or_reason:"APIステータスまたは構造化された理由",api_status:"APIステータス",http_status:"HTTPステータス",
+      quota_details:"返却された割当の詳細",message_inference:"APIメッセージの文言からの判断（推定）",curl_exit:"curl終了コード",
+      finish_reason:"生成の終了理由",block_or_finish_reason:"ブロック情報または終了理由",response_validation:"応答の形式・本文検査",
+      local_validation:"ローカルでの検証",unclassified:"原因を特定できる情報なし"}[.basis] // .basis),
+    (if .apiMessage!="" then "APIの返却文: " + .apiMessage else empty end),
+    (if (.reasons|length)>0 then "APIの理由: " + (.reasons|join(", ")) else empty end),
+    (.quotaViolations[] | "割当: " + .quotaId + " / " + .quotaMetric + " / " + .description),
+    (.fieldViolations[] | "不正なフィールド: " + .field + " / " + .description),
+    (if .retryDelay!=null then "APIが返した待機時間: " + .retryDelay else empty end),
+    (if .finishMessage!="" then "終了メッセージ: " + .finishMessage else empty end),
+    (if .usage.totalTokenCount!=null or .usage.thoughtsTokenCount!=null then
+      "返却された使用量: 入力=" + (.usage.promptTokenCount|tostring) +
+      " / 出力=" + (.usage.candidatesTokenCount|tostring) +
+      " / 思考=" + (.usage.thoughtsTokenCount|tostring) +
+      " / 合計=" + (.usage.totalTokenCount|tostring) + "（nullは不明）" else empty end)
+  ' "$WORK/last-error.json" >&2
+  if "$STOP_RUN"; then
+    printf '処理方針: 追加のAPI送信を停止します。自動再送はしません。\n' >&2
+  else
+    printf '処理方針: この区間を未完了にし、他の区間の処理を続けます。自動再送はしません。\n' >&2
+  fi
+  [ -z "$log" ] || printf '詳細記録: %s\n' "$log" >&2
+  write_error_summary
+  if [ "$phase" = source ]; then
+    printf '{"state":"source_failed","errorsFile":"errors.json"}\n' > "$OUT/status.json"
+  fi
+}
+
+write_error_summary() {
+  [ -f "$CACHE/errors.jsonl" ] || return 0
+  # APIの生メッセージやプロジェクト固有情報は公開用の要約へコピーしません。
+  jq -s 'map({category,summary,action,stopRun,basis,phase,talk,start,end,
+    httpStatus,curlExit,apiStatus,finishReason,blockReason,retryDelay})' \
+    "$CACHE/errors.jsonl" > "$OUT/errors.json"
+}
+
 # request.jsonを唯一の送信原本とし、同じモデル・内容の正常応答を再利用します。
 generate() {
-  local request=$1 hash http rc started finished
+  local request=$1 phase=$2 talk=$3 start=$4 end=$5 hash http rc started finished
   hash=$( { printf '%s\n' "$model"; cat "$request"; } | shasum -a 256 | awk '{print $1}')
   JOB="$CACHE/jobs/$hash"
   mkdir -p "$JOB"
@@ -77,9 +154,10 @@ generate() {
       ([.candidates[0].content.parts[]? | select(.thought != true) |
         .text? | select(type == "string")] | join("") | test("\\S"))' \
       "$JOB/response.json" >/dev/null 2>&1; then
-    printf '応答未完了: HTTP %s / curl %s。記録: %s\n' "$http" "$rc" "$JOB" >&2
-    # 認証・割当エラーでは残りを送っても同じ失敗になり得るため停止。
-    case "$http" in 401|403|429) die '認証・利用枠エラーのため追加送信を止めました。';; esac
+    report_error "$phase" "$talk" "$start" "$end" "$((10#$http))" "$rc" "$JOB/response.json" "" "$JOB"
+    cp "$WORK/last-error.json" "$JOB/error.json"
+    jq --slurpfile issue "$JOB/error.json" '.error=$issue[0]' "$JOB/metadata.json" > "$JOB/metadata.tmp"
+    mv "$JOB/metadata.tmp" "$JOB/metadata.json"
     return 1
   fi
   jq -r '[.candidates[0].content.parts[]? | select(.thought != true) |

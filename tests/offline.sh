@@ -26,6 +26,7 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -z "$request" ]; then
   printf '<html><script>ignore me</script><p>Evan You - Agentic Era</p><p>Alice - Second talk</p></html>\n' > "$out"
+  printf '%s' "${OFFLINE_SCHEDULE_HTTP:-200}"
   exit 0
 fi
 IFS= read -r header
@@ -46,6 +47,11 @@ if jq -e '.generationConfig.responseFormat' "$request" >/dev/null; then
   fi
 else
   printf 'analyze %s %s\n' "$start" "$end" >> "$OFFLINE_STATE/calls"
+  if [ "$start" = "${OFFLINE_ERROR_START:--1}" ]; then
+    cp "$OFFLINE_ERROR_RESPONSE" "$out"
+    printf '%s' "$OFFLINE_ERROR_HTTP"
+    exit "${OFFLINE_ERROR_CURL:-0}"
+  fi
   # 原文プロンプトを省略せず含むことも確認。
   jq -e --rawfile p "$OFFLINE_STATE/prompts/gemini-talk-analysis.md" \
     '.contents[0].parts[1].text|startswith($p)' "$request" >/dev/null
@@ -65,6 +71,10 @@ MOCK
 cat > "$tmp/bin/git" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$OFFLINE_STATE/git-calls"
+if [ "${OFFLINE_GIT_FAIL:-0}" = 1 ] && [ "${3:-}" = push ]; then
+  printf 'offline git push rejected\n' >&2
+  exit 1
+fi
 exit 0
 MOCK
 chmod +x "$tmp/bin/"*
@@ -77,6 +87,9 @@ run_case() {
   GEMINI_API_KEY=offline-test-key PATH="$tmp/bin:$PATH" OFFLINE_STATE="$project" \
     OFFLINE_FAIL_START="${fail_start:--1}" OFFLINE_FINISH="${finish:-STOP}" \
     OFFLINE_INVALID_DISCOVERY="${invalid:-0}" \
+    OFFLINE_ERROR_START="${error_start:--1}" OFFLINE_ERROR_RESPONSE="${error_response:-}" \
+    OFFLINE_ERROR_HTTP="${error_http:-200}" OFFLINE_ERROR_CURL="${error_curl:-0}" \
+    OFFLINE_SCHEDULE_HTTP="${schedule_http:-200}" OFFLINE_GIT_FAIL="${git_fail:-0}" \
     bash "$project/scripts/run.sh" "$@" > "$project/output.log" 2>&1
 }
 for script in "$ROOT"/scripts/*.sh "$ROOT"/tests/*.sh; do bash -n "$script"; done
@@ -132,4 +145,68 @@ if run_case all; then exit 1; fi
 [ ! -e "$project/calls" ]
 if grep -R -l 'offline-test-key' "$tmp" --exclude=curl >/dev/null; then exit 1; fi
 printf 'PASS: 出力打ち切り・巨大入力の拒否・思考情報/署名/キーの非公開\n'
+
+# APIの意味から分類し、出力だけでなく実際に継続/停止することを検証。
+new_case auth_error
+error_start=60
+error_http=400
+error_response="$tmp/auth.json"
+cat > "$error_response" <<'JSON'
+{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Invalid key: offline-test-key\u001b[31m","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID"}]}}
+JSON
+if run_case all; then exit 1; fi
+jq -e '.[0].category=="authentication" and .[0].stopRun==true and .[0].start==60 and .[0].end==1860' \
+  "$project/notes/viteconf-2026/errors.json" >/dev/null
+[ "$(grep -c '^analyze ' "$project/calls")" = 1 ]
+grep -q 'APIキーの認証に失敗' "$project/output.log"
+grep -q '\[REDACTED\]' "$project/output.log"
+if grep -R 'offline-test-key' "$project/output.log" "$project/notes" >/dev/null; then exit 1; fi
+# 詳細はローカルにのみ残し、公開用JSONには生の返却文を混ぜない。
+if grep -q 'apiMessage' "$project/notes/viteconf-2026/errors.json"; then exit 1; fi
+jq -e '.state=="stopped_on_error"' "$project/notes/viteconf-2026/status.json" >/dev/null
+new_case token_error
+error_start=60
+error_http=200
+error_response="$tmp/tokens.json"
+printf '{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"unfinished"}]}}],"usageMetadata":{"thoughtsTokenCount":10}}\n' > "$error_response"
+if run_case all; then exit 1; fi
+jq -e '.[0].category=="output_token_limit" and .[0].stopRun==false' "$project/notes/viteconf-2026/errors.json" >/dev/null
+grep -q '生成が指定のトークン上限で打ち切られました' "$project/output.log"
+[ ! -e "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md" ]
+[ -e "$project/notebooklm/viteconf-2026/2000-second-talk.md" ]
+error_start=-1
+run_case all
+jq -e 'length==0' "$project/notes/viteconf-2026/errors.json" >/dev/null
+new_case quota_error
+error_start=60
+error_http=429
+error_response="$tmp/quota.json"
+cat > "$error_response" <<'JSON'
+{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateRequestsPerDay","quotaMetric":"generate_content_free_tier_requests"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"42s"}]}}
+JSON
+if run_case all; then exit 1; fi
+jq -e '.[0].category=="daily_quota" and .[0].retryDelay=="42s"' "$project/notes/viteconf-2026/errors.json" >/dev/null
+[ "$(grep -c '^analyze ' "$project/calls")" = 1 ]
+grep -q 'APIが返した待機時間: 42s' "$project/output.log"
+new_case network_error
+error_start=60
+error_http=000
+error_curl=6
+if run_case all; then exit 1; fi
+jq -e '.[0].category=="dns_error" and .[0].curlExit==6' "$project/notes/viteconf-2026/errors.json" >/dev/null
+error_start=-1
+error_curl=0
+new_case schedule_error
+schedule_http=503
+if run_case test; then exit 1; fi
+[ ! -e "$project/calls" ]
+jq -e '.[0].category=="schedule_fetch" and .[0].httpStatus==503' "$project/notes/viteconf-2026/errors.json" >/dev/null
+schedule_http=200
+new_case publication_error
+git_fail=1
+if run_case test --push; then exit 1; fi
+[ -e "$project/notebooklm/viteconf-2026/60-evan-agentic-era.md" ]
+jq -e '.[0].category=="publication_failed"' "$project/notes/viteconf-2026/errors.json" >/dev/null
+jq -e '.publication=="failed"' "$project/notes/viteconf-2026/status.json" >/dev/null
+printf 'PASS: 認証/日次枠/DNSで後続停止、打ち切り理由・待機時間を表示、機密除外、復旧時にエラーを更新、取得/公開の失敗を明示\n'
 printf 'すべてのオフライン検証が成功しました。実Gemini解析は未実行です。\n'
